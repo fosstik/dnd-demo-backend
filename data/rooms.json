@@ -1,0 +1,23 @@
+{
+  "room1": {
+    "id": "room1",
+    "type": "unique",
+    "name": "Стартовая локация",
+    "background": "start_bg",
+    "description": "Вы находитесь в древнем храме. Перед вами три загадочные двери.",
+    "technique": "Техника ветвления путей",
+    "actions": [
+      {
+        "id": "action1",
+        "name": "Открыть левую дверь",
+        "stat": "strength",
+        "available": true,
+        "action_result": {
+          "perfect": "Дверь легко поддается и открывается",
+          "success": "Дверь скрипит, но открывается",
+          "failure": "Дверь не поддается"
+        }
+      }
+    ]
+  }
+}

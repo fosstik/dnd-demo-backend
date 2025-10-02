@@ -1,6 +1,7 @@
-const express = require('express');
+import express from 'express';
+import { getGameState, addPlayerToTeam, updatePlayer } from '../utils/dataManager.js';
+
 const router = express.Router();
-const { getGameState, addPlayerToTeam, updatePlayer } = require('../utils/dataManager');
 
 // Выбор команды
 router.post('/select-team', (req, res) => {
@@ -42,4 +43,4 @@ router.post('/gm/move-player', (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

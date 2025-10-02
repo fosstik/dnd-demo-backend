@@ -1,7 +1,8 @@
-const express = require('express');
+import express from 'express';
+import { getGameState, setGameState } from '../utils/dataManager.js';
+import { isRoomCompleted } from '../utils/gameLogic.js';
+
 const router = express.Router();
-const { getGameState, setGameState } = require('../utils/dataManager');
-const { isRoomCompleted } = require('../utils/gameLogic');
 
 // Получение текущей комнаты
 router.get('/current', (req, res) => {
@@ -9,22 +10,21 @@ router.get('/current', (req, res) => {
   const currentRoomId = gameState.game.currentRoom;
   
   if (!currentRoomId) {
-    return res.status(404).json({ error: 'No current room' });
+    return res.status(404).json({ error: 'No active room' });
   }
   
   const currentRoom = gameState.rooms[currentRoomId];
   if (!currentRoom) {
-    return res.status(404).json({ error: 'Current room not found' });
+    return res.status(404).json({ error: 'Room not found' });
   }
   
-  res.json({ 
-    room: currentRoom,
-    gameState: {
-      status: gameState.game.status,
-      currentTurn: gameState.game.currentTurn,
-      turnOrder: gameState.game.turnOrder
-    }
-  });
+  res.json({ room: currentRoom });
+});
+
+// Получение всех комнат (для ГМ)
+router.get('/', (req, res) => {
+  const gameState = getGameState();
+  res.json({ rooms: gameState.rooms });
 });
 
 // Получение конкретной комнаты по ID
@@ -40,33 +40,24 @@ router.get('/:roomId', (req, res) => {
   res.json({ room });
 });
 
-// Получение всех комнат (для ГМ)
-router.get('/', (req, res) => {
-  const gameState = getGameState();
-  res.json({ rooms: gameState.rooms });
-});
-
-// Переход к следующей комнате (только для ГМ)
-router.post('/gm/next-room', (req, res) => {
+// Переход к следующей комнате (для ГМ)
+router.post('/next', (req, res) => {
   const gameState = getGameState();
   const currentRoomId = gameState.game.currentRoom;
   
   if (!currentRoomId) {
-    return res.status(400).json({ error: 'No current room' });
+    return res.status(400).json({ error: 'No active room' });
   }
   
-  // Получаем все ID комнат и находим следующую
   const roomIds = Object.keys(gameState.rooms);
   const currentIndex = roomIds.indexOf(currentRoomId);
   
   if (currentIndex === -1) {
-    return res.status(400).json({ error: 'Current room not found in rooms list' });
+    return res.status(404).json({ error: 'Current room not found' });
   }
   
   const nextIndex = currentIndex + 1;
-  
   if (nextIndex >= roomIds.length) {
-    // Игра завершена
     setGameState({
       game: {
         ...gameState.game,
@@ -83,200 +74,149 @@ router.post('/gm/next-room', (req, res) => {
   }
   
   const nextRoomId = roomIds[nextIndex];
-  const nextRoom = gameState.rooms[nextRoomId];
-  
-  // Сбрасываем прогресс команд для новой комнаты
-  Object.values(gameState.teams).forEach(team => {
-    team.progress = {};
-  });
-  
-  // Сбрасываем доступность действий в следующей комнате
-  if (nextRoom.actions) {
-    nextRoom.actions.forEach(action => {
-      action.available = true;
-    });
-  }
-  
   setGameState({
     game: {
       ...gameState.game,
       currentRoom: nextRoomId,
       currentTurn: 0
-    },
-    teams: gameState.teams,
-    rooms: gameState.rooms
-  });
-  
-  res.json({ 
-    success: true, 
-    nextRoom,
-    gameState: getGameState() 
-  });
-});
-
-// Возврат к предыдущей комнате (только для ГМ)
-router.post('/gm/previous-room', (req, res) => {
-  const gameState = getGameState();
-  const currentRoomId = gameState.game.currentRoom;
-  
-  if (!currentRoomId) {
-    return res.status(400).json({ error: 'No current room' });
-  }
-  
-  const roomIds = Object.keys(gameState.rooms);
-  const currentIndex = roomIds.indexOf(currentRoomId);
-  
-  if (currentIndex <= 0) {
-    return res.status(400).json({ error: 'No previous room available' });
-  }
-  
-  const previousRoomId = roomIds[currentIndex - 1];
-  const previousRoom = gameState.rooms[previousRoomId];
-  
-  setGameState({
-    game: {
-      ...gameState.game,
-      currentRoom: previousRoomId,
-      currentTurn: 0
     }
   });
   
+  Object.values(gameState.teams).forEach(team => {
+    team.progress = {};
+  });
+  
   res.json({ 
     success: true, 
-    previousRoom,
+    nextRoom: gameState.rooms[nextRoomId],
     gameState: getGameState() 
   });
 });
 
 // Проверка завершения текущей комнаты
-router.get('/current/completion', (req, res) => {
+router.get('/current/completed', (req, res) => {
   const gameState = getGameState();
   const currentRoomId = gameState.game.currentRoom;
   
   if (!currentRoomId) {
-    return res.status(404).json({ error: 'No current room' });
+    return res.status(400).json({ error: 'No active room' });
   }
   
   const currentRoom = gameState.rooms[currentRoomId];
-  const completionStatus = {};
+  const completedTeams = {};
   
-  // Проверяем завершение для каждой команды
   Object.values(gameState.teams).forEach(team => {
-    completionStatus[team.id] = {
-      completed: isRoomCompleted(currentRoom, team.progress || {}),
-      progress: team.progress || {}
+    completedTeams[team.id] = isRoomCompleted(currentRoom, team.progress || {});
+  });
+  
+  let roomCompleted = false;
+  if (currentRoom.type === 'common') {
+    const totalSuccesses = Object.values(gameState.teams).reduce((total, team) => {
+      const successfulActions = Object.values(team.progress || {})
+        .filter(progress => progress.result !== 'failure').length;
+      return total + successfulActions;
+    }, 0);
+    
+    roomCompleted = totalSuccesses >= currentRoom.required_successes;
+  } else {
+    roomCompleted = Object.values(completedTeams).every(completed => completed);
+  }
+  
+  res.json({ 
+    roomCompleted,
+    completedTeams,
+    requiredSuccesses: currentRoom.required_successes,
+    currentSuccesses: calculateCurrentSuccesses(gameState)
+  });
+});
+
+// Получение прогресса по комнате
+router.get('/:roomId/progress', (req, res) => {
+  const { roomId } = req.params;
+  const gameState = getGameState();
+  
+  const room = gameState.rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  const teamProgress = {};
+  Object.values(gameState.teams).forEach(team => {
+    teamProgress[team.id] = {
+      progress: team.progress || {},
+      completed: isRoomCompleted(room, team.progress || {})
     };
   });
   
-  // Проверяем общее завершение комнаты (для общих комнат)
-  let roomFullyCompleted = false;
-  if (currentRoom.type === 'common') {
-    const allSuccessfulActions = Object.values(gameState.teams)
-      .flatMap(team => Object.values(team.progress || {}))
-      .filter(progress => progress.result !== 'failure');
-    
-    roomFullyCompleted = allSuccessfulActions.length >= currentRoom.required_successes;
-  } else {
-    // Для уникальных комнат - все команды должны завершить
-    roomFullyCompleted = Object.values(completionStatus).every(status => status.completed);
-  }
-  
-  res.json({
-    roomId: currentRoomId,
-    completionStatus,
-    roomFullyCompleted,
-    requiredSuccesses: currentRoom.required_successes
+  res.json({ 
+    room,
+    teamProgress,
+    overallProgress: calculateOverallProgress(room, gameState.teams)
   });
 });
 
-// Получение техники левел-дизайна для текущей комнаты (для ГМ)
-router.get('/current/technique', (req, res) => {
+// Сброс комнаты (для ГМ)
+router.post('/:roomId/reset', (req, res) => {
+  const { roomId } = req.params;
   const gameState = getGameState();
-  const currentRoomId = gameState.game.currentRoom;
   
-  if (!currentRoomId) {
-    return res.status(404).json({ error: 'No current room' });
+  const room = gameState.rooms[roomId];
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
   }
   
-  const currentRoom = gameState.rooms[currentRoomId];
-  
-  res.json({
-    technique: currentRoom.technique,
-    description: currentRoom.description,
-    roomName: currentRoom.name
+  room.actions.forEach(action => {
+    action.available = true;
   });
-});
-
-// Сброс прогресса текущей комнаты (только для ГМ)
-router.post('/gm/reset-current-room', (req, res) => {
-  const gameState = getGameState();
-  const currentRoomId = gameState.game.currentRoom;
   
-  if (!currentRoomId) {
-    return res.status(400).json({ error: 'No current room' });
-  }
-  
-  const currentRoom = gameState.rooms[currentRoomId];
-  
-  // Сбрасываем прогресс всех команд
   Object.values(gameState.teams).forEach(team => {
     team.progress = {};
   });
   
-  // Восстанавливаем доступность всех действий
-  if (currentRoom.actions) {
-    currentRoom.actions.forEach(action => {
-      action.available = true;
-    });
-  }
-  
-  // Сбрасываем очередь ходов
-  setGameState({
-    game: {
-      ...gameState.game,
-      currentTurn: 0
-    },
-    teams: gameState.teams,
-    rooms: gameState.rooms
-  });
-  
   res.json({ 
     success: true, 
-    message: 'Room progress reset',
+    room,
     gameState: getGameState() 
   });
 });
 
-// Получение статистики по текущей комнате
-router.get('/current/stats', (req, res) => {
-  const gameState = getGameState();
-  const currentRoomId = gameState.game.currentRoom;
-  
-  if (!currentRoomId) {
-    return res.status(404).json({ error: 'No current room' });
-  }
-  
-  const stats = {
-    roomId: currentRoomId,
-    teamProgress: {}
-  };
-  
-  // Собираем статистику по командам
-  Object.values(gameState.teams).forEach(team => {
-    const progress = team.progress || {};
-    const successfulActions = Object.values(progress).filter(p => p.result !== 'failure').length;
-    const failedActions = Object.values(progress).filter(p => p.result === 'failure').length;
-    
-    stats.teamProgress[team.id] = {
-      teamName: team.name,
-      successfulActions,
-      failedActions,
-      totalActions: Object.keys(progress).length,
-      completionPercentage: team.progress ? (successfulActions / Object.keys(progress).length) * 100 : 0
-    };
-  });
-  
-  res.json(stats);
-});
+// Вспомогательные функции
+function calculateCurrentSuccesses(gameState) {
+  return Object.values(gameState.teams).reduce((total, team) => {
+    const successfulActions = Object.values(team.progress || {})
+      .filter(progress => progress.result !== 'failure').length;
+    return total + successfulActions;
+  }, 0);
+}
 
-module.exports = router;
+function calculateOverallProgress(room, teams) {
+  if (room.type === 'common') {
+    const totalSuccesses = Object.values(teams).reduce((total, team) => {
+      const successfulActions = Object.values(team.progress || {})
+        .filter(progress => progress.result !== 'failure').length;
+      return total + successfulActions;
+    }, 0);
+    
+    return {
+      type: 'common',
+      current: totalSuccesses,
+      required: room.required_successes,
+      percentage: Math.min(100, (totalSuccesses / room.required_successes) * 100)
+    };
+  } else {
+    const completedTeams = Object.values(teams).filter(team => 
+      isRoomCompleted(room, team.progress || {})
+    ).length;
+    
+    const totalTeams = Object.values(teams).length;
+    
+    return {
+      type: 'unique',
+      completed: completedTeams,
+      total: totalTeams,
+      percentage: (completedTeams / totalTeams) * 100
+    };
+  }
+}
+
+export default router;

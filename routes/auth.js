@@ -1,58 +1,52 @@
-const express = require('express');
+import express from 'express';
+import { getGameState, addPlayerToTeam } from '../utils/dataManager.js';
+import { validateTeam, validateGameState } from '../middleware/validation.js';
+import { authenticatePlayer, requireRole, requireTeamAccess } from '../middleware/authentication.js';
+
 const router = express.Router();
-const { getGameState, addPlayer, updatePlayer } = require('../utils/dataManager');
 
-// Вход в игру
-router.post('/join', (req, res) => {
-  const { name, role } = req.body;
+// Выбор команды
+router.post('/select-team', authenticatePlayer, validateGameState('lobby'), (req, res) => {
+  const { teamId } = req.body;
   
-  if (!name || !role) {
-    return res.status(400).json({ error: 'Name and role are required' });
+  if (!teamId) {
+    return res.status(400).json({ error: 'Team ID is required' });
   }
-
-  const player = addPlayer({ name, role });
-  res.json({ player, gameState: getGameState() });
-});
-
-// Выбор персонажа
-router.post('/select-character', (req, res) => {
-  const { playerId, character, characterClass } = req.body;
   
-  const updatedPlayer = updatePlayer(playerId, { 
-    character, 
-    class: characterClass,
-    stats: getStatsForClass(characterClass)
-  });
-  
-  if (updatedPlayer) {
-    res.json({ player: updatedPlayer });
+  if (addPlayerToTeam(req.playerId, teamId)) {
+    res.json({ success: true, gameState: getGameState() });
   } else {
-    res.status(404).json({ error: 'Player not found' });
+    res.status(400).json({ error: 'Failed to join team' });
   }
 });
 
-// Готовность игрока
-router.post('/toggle-ready', (req, res) => {
-  const { playerId } = req.body;
+// Получение списка команд
+router.get('/', authenticatePlayer, (req, res) => {
+  res.json({ teams: getGameState().teams });
+});
+
+// ГМ: изменение названия команды
+router.post('/gm/rename-team', authenticatePlayer, requireRole('gm'), validateTeam, (req, res) => {
+  const { teamId, newName } = req.body;
+  const gameState = getGameState();
   
-  const player = getGameState().players[playerId];
-  if (player) {
-    const updatedPlayer = updatePlayer(playerId, { ready: !player.ready });
-    res.json({ player: updatedPlayer });
+  gameState.teams[teamId].name = newName;
+  res.json({ success: true, teams: gameState.teams });
+});
+
+// ГМ: перемещение игрока между командами
+router.post('/gm/move-player', authenticatePlayer, requireRole('gm'), (req, res) => {
+  const { playerId, newTeamId } = req.body;
+  
+  if (!playerId || !newTeamId) {
+    return res.status(400).json({ error: 'Player ID and Team ID are required' });
+  }
+  
+  if (addPlayerToTeam(playerId, newTeamId)) {
+    res.json({ success: true, gameState: getGameState() });
   } else {
-    res.status(404).json({ error: 'Player not found' });
+    res.status(400).json({ error: 'Failed to move player' });
   }
 });
 
-function getStatsForClass(characterClass) {
-  // Статы по классам (можно вынести в отдельный файл)
-  const stats = {
-    warrior: { strength: 8, dexterity: 4, intelligence: 2 },
-    rogue: { strength: 4, dexterity: 8, intelligence: 4 },
-    mage: { strength: 2, dexterity: 4, intelligence: 8 },
-    cleric: { strength: 5, dexterity: 4, intelligence: 6 }
-  };
-  return stats[characterClass] || stats.warrior;
-}
-
-module.exports = router;
+export default router;
